@@ -8529,6 +8529,8 @@ public:
          Console::Yes},
         {"vanityrefund", HandleVanityRefundCommand, SEC_GAMEMASTER,
          Console::Yes},
+        {"vanitycheck", HandleVanityCheckCommand, SEC_GAMEMASTER,
+         Console::Yes},
         {"localtransmogall", HandleLocalTransmogAllCommand, SEC_ADMINISTRATOR,
          Console::No},
         {"localmysticaltarall", HandleLocalMysticAltarAllCommand,
@@ -8630,6 +8632,37 @@ public:
     handler->PSendSysMessage(
         "Removed vanity item {} from the collection of {}'s account ({}).",
         itemId, player->GetName(), accountId);
+    WarnIfUnlockAllVanity(handler);
+    return true;
+  }
+
+  static bool HandleVanityCheckCommand(ChatHandler *handler, uint32 itemId,
+                                       Optional<PlayerIdentifier> player) {
+    if (!player)
+      player = PlayerIdentifier::FromTarget(handler);
+    if (!player)
+    {
+      handler->SendSysMessage("Name a player or select one.");
+      return true;
+    }
+
+    uint32 const accountId =
+        player->IsConnected()
+            ? player->GetConnectedPlayer()->GetSession()->GetAccountId()
+            : sCharacterCache->GetCharacterAccountIdByGuid(player->GetGUID());
+    if (!accountId)
+    {
+      handler->PSendSysMessage("No account found for {}.", player->GetName());
+      return true;
+    }
+
+    bool const owned = bool(CharacterDatabase.Query(
+        "SELECT 1 FROM `account_vanity_collection` WHERE `account_id` = {} "
+        "AND `item_id` = {}",
+        accountId, itemId));
+    handler->PSendSysMessage(
+        "{}'s account ({}) {} vanity item {} in its collection.",
+        player->GetName(), accountId, owned ? "has" : "does not have", itemId);
     WarnIfUnlockAllVanity(handler);
     return true;
   }
