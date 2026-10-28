@@ -7,6 +7,7 @@
 #include "AccountMgr.h"
 #include "AscensionAccountProgress.h"
 #include "AscensionFelsworn.h"
+#include "CharacterCache.h"
 #include "AscensionHighRiskPolicy.h"
 #include "AscensionItemScaling.h"
 #include "AscensionPyromancer.h"
@@ -94,6 +95,7 @@
 #include "Guild.h"
 #include "GuildPackets.h"
 #include "Item.h"
+#include "Mail.h"
 #include "ItemScript.h"
 #include "LocalLevelScaling.h"
 #include "Log.h"
@@ -6659,6 +6661,23 @@ public:
         return true;
     }
 
+  bool RevokeVanityItem(Player *player, uint32 itemId) {
+    std::shared_ptr<PlayerCollectionState> state = GetState(player);
+    if (!state || !state->OwnedVanityItems.erase(itemId))
+      return false;
+
+    CharacterDatabase.Execute("DELETE FROM `account_vanity_collection` WHERE "
+                              "`account_id` = {} AND `item_id` = {}",
+                              state->AccountId, itemId);
+    SendVanityCollection(player, *state);
+    return true;
+  }
+
+  [[nodiscard]] uint32 BazaarTokenCost(uint32 itemId) const {
+    auto const itr = _vanityItems.find(itemId);
+    return itr == _vanityItems.end() ? 0 : itr->second.BazaarTokenCost;
+  }
+
   bool GrantMysticAltarVanityItems(Player *player) {
     std::shared_ptr<PlayerCollectionState> state = GetState(player);
     if (!state)
@@ -8506,6 +8525,10 @@ public:
          Console::No},
         {"localvanityall", HandleLocalVanityAllCommand, SEC_ADMINISTRATOR,
          Console::No},
+        {"vanityrevoke", HandleVanityRevokeCommand, SEC_GAMEMASTER,
+         Console::Yes},
+        {"vanityrefund", HandleVanityRefundCommand, SEC_GAMEMASTER,
+         Console::Yes},
         {"localtransmogall", HandleLocalTransmogAllCommand, SEC_ADMINISTRATOR,
          Console::No},
         {"localmysticaltarall", HandleLocalMysticAltarAllCommand,
@@ -8543,6 +8566,115 @@ public:
       ChatHandler(target->GetSession())
           .SendSysMessage(
               "You have been granted the full Ascension vanity collection.");
+    return true;
+  }
+
+  static bool RevokeFromAccount(ChatHandler *handler,
+                                Optional<PlayerIdentifier> &player,
+                                uint32 itemId, uint32 &accountId) {
+    if (!player)
+      player = PlayerIdentifier::FromTarget(handler);
+    if (!player)
+    {
+      handler->SendSysMessage("Name a player or select one.");
+      return false;
+    }
+
+    accountId =
+        player->IsConnected()
+            ? player->GetConnectedPlayer()->GetSession()->GetAccountId()
+            : sCharacterCache->GetCharacterAccountIdByGuid(player->GetGUID());
+    if (!accountId)
+    {
+      handler->PSendSysMessage("No account found for {}.", player->GetName());
+      return false;
+    }
+
+    WorldSession *session = sWorldSessionMgr->FindSession(accountId);
+    Player *online = session ? session->GetPlayer() : nullptr;
+    bool const revoked =
+        online
+            ? AscensionCollectionService::Instance().RevokeVanityItem(online, itemId)
+            : bool(CharacterDatabase.Query(
+                  "SELECT 1 FROM `account_vanity_collection` WHERE "
+                  "`account_id` = {} AND `item_id` = {}",
+                  accountId, itemId));
+    if (!revoked)
+    {
+      handler->PSendSysMessage(
+          "{}'s account does not have vanity item {} in its collection.",
+          player->GetName(), itemId);
+      return false;
+    }
+
+    if (!online)
+      CharacterDatabase.Execute("DELETE FROM `account_vanity_collection` WHERE "
+                                "`account_id` = {} AND `item_id` = {}",
+                                accountId, itemId);
+    return true;
+  }
+
+  static void WarnIfUnlockAllVanity(ChatHandler *handler) {
+    if (ascensionCompatConfig.GetConfigValue<bool>(
+            AscensionCompatConfig::UNLOCK_ALL_VANITY))
+      handler->SendSysMessage("CoA.UnlockAllVanity is on: only sigils and "
+                              "banks are limited to owned items here.");
+  }
+
+  static bool HandleVanityRevokeCommand(ChatHandler *handler, uint32 itemId,
+                                        Optional<PlayerIdentifier> player) {
+    uint32 accountId = 0;
+    if (!RevokeFromAccount(handler, player, itemId, accountId))
+      return true;
+
+    handler->PSendSysMessage(
+        "Removed vanity item {} from the collection of {}'s account ({}).",
+        itemId, player->GetName(), accountId);
+    WarnIfUnlockAllVanity(handler);
+    return true;
+  }
+
+  static bool HandleVanityRefundCommand(ChatHandler *handler, uint32 itemId,
+                                        Optional<PlayerIdentifier> player) {
+    uint32 const cost =
+        AscensionCollectionService::Instance().BazaarTokenCost(itemId);
+    if (!cost)
+    {
+      handler->PSendSysMessage(
+          "Vanity item {} has no Bazaar Token price to refund.", itemId);
+      return true;
+    }
+
+    uint32 accountId = 0;
+    if (!RevokeFromAccount(handler, player, itemId, accountId))
+      return true;
+
+    Item *tokens = Item::CreateItem(VANITY_BAZAAR_TOKEN_ITEM, cost);
+    if (!tokens)
+    {
+      handler->PSendSysMessage(
+          "Removed vanity item {} but could not create the {} Bazaar Tokens; "
+          "send them by hand.",
+          itemId, cost);
+      return true;
+    }
+
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    tokens->SaveToDB(trans);
+    MailDraft("Bazaar Token refund",
+              fmt::format("Your purchase of vanity item {} was refunded.", itemId))
+        .AddItem(tokens)
+        .SendMailTo(trans,
+                    MailReceiver(player->GetConnectedPlayer(),
+                                 player->GetGUID().GetCounter()),
+                    MailSender(MAIL_NORMAL, 0, MAIL_STATIONERY_GM));
+    CharacterDatabase.CommitTransaction(trans);
+
+    handler->PSendSysMessage(
+        "Refunded vanity item {} for {}: removed it from account {} and mailed "
+        "{} Bazaar Tokens.",
+        itemId, player->GetName(), accountId, cost);
+    WarnIfUnlockAllVanity(handler);
     return true;
   }
 
