@@ -452,6 +452,15 @@ void WorldSession::HandleMailReturnToSender(WorldPacket& recvData)
         return;
     }
 
+    if (m->messageType != MAIL_NORMAL || !m->sender || m->stationery == MAIL_STATIONERY_GM ||
+        m->sender == player->GetGUID().GetCounter() || m->IsReturnedMail() ||
+        !sCharacterCache->GetCharacterAccountIdByGuid(ObjectGuid(HighGuid::Player, m->sender)))
+    {
+        ChatHandler(this).SendSysMessage("This mail cannot be returned.");
+        player->SendMailResult(mailId, MAIL_RETURNED_TO_SENDER, MAIL_ERR_INTERNAL_ERROR);
+        return;
+    }
+
     if (m->HasItems())
     {
         for (MailItemInfoVec::iterator itr = m->items.begin(); itr != m->items.end(); ++itr)

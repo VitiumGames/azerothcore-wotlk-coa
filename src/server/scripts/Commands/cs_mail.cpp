@@ -42,8 +42,9 @@ public:
     {
         static ChatCommandTable mailCommandTable =
         {
-            { "list",   HandleMailListCommand,   rbac::RBAC_PERM_COMMAND_MAIL_LIST,   Console::Yes },
-            { "return", HandleMailReturnCommand, rbac::RBAC_PERM_COMMAND_MAIL_RETURN, Console::Yes }
+            { "list",     HandleMailListCommand,     rbac::RBAC_PERM_COMMAND_MAIL_LIST,   Console::Yes },
+            { "returned", HandleMailReturnedCommand, rbac::RBAC_PERM_COMMAND_MAIL_LIST,   Console::Yes },
+            { "return",   HandleMailReturnCommand,   rbac::RBAC_PERM_COMMAND_MAIL_RETURN, Console::Yes }
         };
 
         static ChatCommandTable commandTable =
@@ -96,6 +97,50 @@ public:
             result += Acore::StringFormat("{}(guid:{})", items[i].item_template, items[i].item_guid);
         }
         return result;
+    }
+
+    static bool HandleMailReturnedCommand(ChatHandler* handler, PlayerIdentifier player)
+    {
+        QueryResult result = CharacterDatabase.Query(
+            "SELECT `id`, `receiver`, `subject`, `money`, `deliver_time` FROM `mail` "
+            "WHERE `sender` = {} AND (`checked` & {}) ORDER BY `id` DESC LIMIT 50",
+            player.GetGUID().GetCounter(), uint32(MAIL_CHECK_MASK_RETURNED));
+        if (!result)
+        {
+            handler->PSendSysMessage("No mail returned by {} is waiting in any mailbox.", player.GetName());
+            return true;
+        }
+
+        handler->PSendSysMessage("Mail returned by {} that the original sender has not removed yet:", player.GetName());
+        do
+        {
+            Field* fields = result->Fetch();
+            uint32 const mailId = fields[0].Get<uint32>();
+            ObjectGuid::LowType const receiver = fields[1].Get<uint32>();
+            std::string receiverName = "<unknown>";
+            sCharacterCache->GetCharacterNameByGuid(ObjectGuid(HighGuid::Player, receiver), receiverName);
+
+            std::string items;
+            if (QueryResult itemResult = CharacterDatabase.Query(
+                    "SELECT ii.`itemEntry`, ii.`count` FROM `mail_items` mi "
+                    "JOIN `item_instance` ii ON ii.`guid` = mi.`item_guid` WHERE mi.`mail_id` = {}",
+                    mailId))
+            {
+                do
+                {
+                    Field* itemFields = itemResult->Fetch();
+                    uint32 const entry = itemFields[0].Get<uint32>();
+                    ItemTemplate const* proto = sObjectMgr->GetItemTemplate(entry);
+                    items += Acore::StringFormat("{}{} {} x{}", items.empty() ? "" : ", ", entry,
+                        proto ? proto->Name1 : "?", itemFields[1].Get<uint32>());
+                } while (itemResult->NextRow());
+            }
+
+            handler->PSendSysMessage("Mail {} now with {} ({}): \"{}\", {} copper, items: {}, returned {}",
+                mailId, receiverName, receiver, fields[2].Get<std::string>(), fields[3].Get<uint32>(),
+                items.empty() ? "none" : items, Acore::Time::TimeToTimestampStr(Seconds(fields[4].Get<uint32>())));
+        } while (result->NextRow());
+        return true;
     }
 
     static bool HandleMailListCommand(ChatHandler* handler, Optional<PlayerIdentifier> target)
