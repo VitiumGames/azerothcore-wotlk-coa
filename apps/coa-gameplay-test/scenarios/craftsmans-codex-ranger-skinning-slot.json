@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "name": "Craftsman's Codex: Ranger Skinning does not take a primary profession slot after a relog",
+  "contract": "Rangers (class 21) start with Skinning (8613), which Player::_addSpell and Player::removeSpell exempt from the primary profession count. The Craftsman's Codex recomputes free profession slots at every login and counted Ranger Skinning, so after a relog a Ranger with Skinning and one profession had no free slot left. Expected: after learning Alchemy (2259) and relogging, Apprentice Engineer (4039) is still available (0) in the Book of Artisans; after learning Tailoring (3908) as the second profession it is not a row (-1).",
+  "timeout_ms": 90000,
+  "players": [ { "id": "ranger", "race": 1, "class": 21, "level": 60 } ],
+  "creatures": [ { "id": "book", "owner": "ranger", "entry": 57500, "distance": 2, "faction": 35 } ],
+  "steps": [
+    { "action": "assert", "label": "Control: the Ranger starts with Skinning", "actor": "ranger", "metric": "knows_spell", "spell": 8613, "equals": 1 },
+    { "action": "learn", "actor": "ranger", "spell": 2259 },
+    { "action": "relog", "actor": "ranger" },
+    { "action": "assert", "label": "Control: Skinning and Alchemy are still known after the relog", "actor": "ranger", "metric": "knows_spell", "spell": 8613, "equals": 1 },
+    { "action": "assert", "actor": "ranger", "metric": "knows_spell", "spell": 2259, "equals": 1 },
+    { "action": "gossip_hello", "actor": "ranger", "target": "book" },
+    { "action": "gossip_select", "actor": "ranger", "option": 0 },
+    { "action": "assert", "label": "DISCRIMINATING: after the relog a second profession is still available", "actor": "ranger", "metric": "trainer_window_state", "spell": 4039, "equals": 0, "within_ms": 3000 },
+    { "action": "learn", "actor": "ranger", "spell": 3908 },
+    { "action": "relog", "actor": "ranger" },
+    { "action": "gossip_hello", "actor": "ranger", "target": "book" },
+    { "action": "gossip_select", "actor": "ranger", "option": 0 },
+    { "action": "assert", "label": "Control: with two professions besides Skinning no third is offered", "actor": "ranger", "metric": "trainer_window_state", "spell": 4039, "equals": -1, "within_ms": 3000 }
+  ]
+}
